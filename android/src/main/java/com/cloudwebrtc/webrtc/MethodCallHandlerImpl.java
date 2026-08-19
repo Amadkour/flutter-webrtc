@@ -868,6 +868,13 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
         getDisplayMedia(constraintsMap, result);
         break;
       }
+      case "createFrameCapturerTrack": {
+        MediaStream mediaStream =
+                getPeerConnectionFactory().createLocalMediaStream(getNextStreamUUID());
+        ElFaheemCapturerBridge.createFrameCapturerTrack(
+                this, applicationContext, mediaStream, result);
+        break;
+      }
       case "startRecordToFile":
         //This method can a lot of different exceptions
         //so we should notify plugin user about them
