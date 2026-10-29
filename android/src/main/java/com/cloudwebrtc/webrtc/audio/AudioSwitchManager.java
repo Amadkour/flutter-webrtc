@@ -42,8 +42,9 @@ public class AudioSwitchManager {
             Unit> audioDeviceChangeListener = (devices, currentDevice) -> null;
 
     @NonNull
-    public AudioManager.OnAudioFocusChangeListener audioFocusChangeListener = (i -> {
-    });
+    public AudioManager.OnAudioFocusChangeListener audioFocusChangeListener =
+            // ElFaheem: forwarded to the app (phone calls mute the mic, see ElFaheemBridge); was a no-op.
+            com.cloudwebrtc.webrtc.ElFaheemBridge::dispatchAudioFocusChange;
 
     @NonNull
     public List<Class<? extends AudioDevice>> preferredDeviceList;
