@@ -524,7 +524,12 @@ public class GetUserMediaImpl {
                 && videoConstraints.hasKey("useElFaheemCapturer")
                 && videoConstraints.getBoolean("useElFaheemCapturer");
         if (useElFaheemCapturer) {
-            createDisplayMediaTrack(new ElFaheemFrameCapturer(), result, mediaStream);
+            // The app renderer scales the frames itself; width / height /
+            // frameRate (when given) only describe the track it will get.
+            createDisplayMediaTrack(new ElFaheemFrameCapturer(), result, mediaStream,
+                    constraintInt(videoConstraints, "width"),
+                    constraintInt(videoConstraints, "height"),
+                    constraintInt(videoConstraints, "frameRate"));
             return;
         }
         // --- end ElFaheem branch — original behavior below is unchanged ---
@@ -567,7 +572,25 @@ public class GetUserMediaImpl {
             resultError("screenRequestPermissions", "GetDisplayMediaFailed, User revoked permission to capture the screen.", result);
             return;
         }
-        createDisplayMediaTrack(videoCapturer, result, mediaStream);
+        createDisplayMediaTrack(videoCapturer, result, mediaStream, 0, 0, 0);
+    }
+
+    /** A positive int constraint (int or double on the wire), else 0. */
+    private static int constraintInt(ConstraintsMap map, String key) {
+        if (map == null || !map.hasKey(key)) return 0;
+        ObjectType type = map.getType(key);
+        if (type == ObjectType.Number) {
+            try {
+                return Math.max(0, map.getInt(key));
+            } catch (Exception e) {
+                try {
+                    return Math.max(0, (int) map.getDouble(key));
+                } catch (Exception ignored) {
+                    return 0;
+                }
+            }
+        }
+        return 0;
     }
 
     /**
@@ -579,7 +602,8 @@ public class GetUserMediaImpl {
      * tail half, unchanged in behavior — only parameterized on the capturer.
      */
     private void createDisplayMediaTrack(
-            VideoCapturer videoCapturer, final Result result, final MediaStream mediaStream) {
+            VideoCapturer videoCapturer, final Result result, final MediaStream mediaStream,
+            int width, int height, int fps) {
         VideoTrack displayTrack;
         PeerConnectionFactory pcFactory = stateProvider.getPeerConnectionFactory();
         VideoSource videoSource = pcFactory.createVideoSource(true);
@@ -598,9 +622,9 @@ public class GetUserMediaImpl {
         display.getRealSize(size);
 
         VideoCapturerInfoEx info = new VideoCapturerInfoEx();
-        info.width = size.x;
-        info.height = size.y;
-        info.fps = DEFAULT_FPS;
+        info.width = width > 0 ? width : size.x;
+        info.height = height > 0 ? height : size.y;
+        info.fps = fps > 0 ? fps : DEFAULT_FPS;
         info.isScreenCapture = true;
         info.capturer = videoCapturer;
 
