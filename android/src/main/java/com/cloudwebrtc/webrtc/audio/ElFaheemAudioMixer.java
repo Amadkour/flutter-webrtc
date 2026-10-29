@@ -27,11 +27,14 @@ import java.nio.ShortBuffer;
  *   disables (and by default stops) the mic track, which silences the
  *   shared audio riding on it too.
  *
- * Echo: the mic part arrives here already processed by the platform's
- * hardware AEC / NS when the module uses them (the default on API 29+); the
- * shared audio is added afterwards and is not in WebRTC's far-end reference,
- * so software AEC (devices without hardware AEC) leaves it alone. The app's
- * own playback (the remote voices) is excluded from the capture by uid.
+ * Processing: the mic part arrives here already through the platform's
+ * hardware AEC / NS when the module uses them (the default on API 29+). The
+ * shared audio is added BEFORE WebRTC's own audio processing, so it does go
+ * through the software APM: its noise suppression and AGC treat the mix as
+ * one voice signal (music can be pumped or thinned a little). It is not in
+ * WebRTC's far-end reference, so echo cancellation does not try to remove
+ * it. The app's own playback (the remote voices) is excluded from the
+ * capture by uid, so there is no echo loop.
  */
 public final class ElFaheemAudioMixer implements JavaAudioDeviceModule.AudioBufferCallback {
 

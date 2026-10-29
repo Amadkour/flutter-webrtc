@@ -350,6 +350,9 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     // ElFaheem: the mic buffer hook — mixes a screen share's device audio into the
     // outgoing mic and implements the mic soft mute (a no-op while neither is active).
     audioDeviceModuleBuilder.setAudioBufferCallback(ElFaheemAudioMixer.INSTANCE);
+    // The mixer is process-static: a soft mute left by a dead engine (hot restart, a Dart
+    // side that died mid-share) must not zero the new module's mic.
+    ElFaheemAudioMixer.INSTANCE.setMicSoftMuted(false);
 
     recordSamplesReadyCallbackAdapter.addCallback(getUserMediaImpl.inputSamplesInterceptor);
 

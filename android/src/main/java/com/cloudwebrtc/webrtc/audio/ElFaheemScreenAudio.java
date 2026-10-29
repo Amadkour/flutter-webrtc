@@ -11,6 +11,7 @@ import android.util.Log;
 import androidx.annotation.RequiresApi;
 
 import java.nio.ShortBuffer;
+import java.util.Arrays;
 
 /**
  * Device audio for a screen share (API 29+): an AudioRecord on
@@ -22,7 +23,10 @@ import java.nio.ShortBuffer;
  * (allowAudioPlaybackCapture=false) are silent here.
  *
  * Captured as 48 kHz stereo 16-bit into a 500 ms ring buffer. The mic
- * thread pulls from it in {@link #mixInto}: resampled (linear, with its
+ * thread pulls from it in {@link #mixInto}: low-passed below the mic's
+ * Nyquist when the mic runs slower than 48 kHz (4th-order Butterworth, two
+ * biquads: linear interpolation alone would fold 8-24 kHz of music back into
+ * a 16 kHz mic's band), resampled (linear, with its
  * phase carried across buffers) to the mic's rate, down / up-mixed to the
  * mic's channel count, added to the mic samples and soft-limited.
  * Latency stays bounded: it waits for 20 ms before the first pull and
@@ -58,6 +62,14 @@ final class ElFaheemScreenAudio {
     // Resampler state; only touched on the mic thread (inside mixInto, under `this`).
     private double phase = 1.0;
     private float prevL, prevR, curL, curR;
+
+    // Anti-alias low-pass, mic thread only (no allocation): per biquad b0, b1, b2, a1, a2 and the
+    // transposed direct form II state z1, z2 per channel. Set up when the mic rate changes.
+    private static final double[] BUTTERWORTH_Q = {0.54119610, 1.30656296};
+    private final double[] lpCoef = new double[10];
+    private final double[] lpState = new double[8];
+    private int lpRate = 0;
+    private boolean lpOn = false;
 
     // Stats for the log.
     private long capturedFrames = 0;
@@ -97,12 +109,17 @@ final class ElFaheemScreenAudio {
             throw new IllegalStateException("AudioRecord not initialized");
         }
         ElFaheemScreenAudio audio = new ElFaheemScreenAudio(record);
-        record.startRecording();
-        if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
-            record.release();
-            throw new IllegalStateException("AudioRecord did not start");
+        boolean started = false;
+        try {
+            record.startRecording(); // may throw IllegalStateException
+            if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                throw new IllegalStateException("AudioRecord did not start");
+            }
+            audio.thread.start();
+            started = true;
+        } finally {
+            if (!started) record.release(); // never leak the capture on a failed start
         }
-        audio.thread.start();
         Log.i(TAG, "device audio capture started: " + RATE + " Hz stereo, buffer " + bytes
                 + " B, usages MEDIA|GAME|UNKNOWN, own uid " + Process.myUid() + " excluded");
         return audio;
@@ -193,6 +210,7 @@ final class ElFaheemScreenAudio {
     synchronized void mixInto(ShortBuffer dst, int frames, int channels, int rate, boolean zeroMic) {
         if (frames <= 0 || channels <= 0 || rate <= 0) return;
         final double step = (double) RATE / rate;
+        if (rate != lpRate) setUpLowPass(rate);
 
         if (filledFrames > HIGH_WATER_FRAMES) {
             int drop = filledFrames - TRIM_TO_FRAMES;
@@ -218,8 +236,8 @@ final class ElFaheemScreenAudio {
                     prevL = curL;
                     prevR = curR;
                     int src = readFrame * CHANNELS;
-                    curL = ring[src];
-                    curR = ring[src + 1];
+                    curL = lpOn ? lowPass(0, ring[src]) : ring[src];
+                    curR = lpOn ? lowPass(1, ring[src + 1]) : ring[src + 1];
                     readFrame = (readFrame + 1) % RING_FRAMES;
                     filledFrames--;
                     phase -= 1.0;
@@ -243,6 +261,44 @@ final class ElFaheemScreenAudio {
                 }
             }
         }
+    }
+
+    /**
+     * A mic slower than the capture (16 / 32 / 44.1 kHz): cut-off at 0.42 x the mic rate
+     * (6.7 kHz for 16 kHz), RBJ low-pass biquads at 48 kHz. 48 kHz or more: no filter.
+     */
+    private void setUpLowPass(int rate) {
+        lpRate = rate;
+        lpOn = rate < RATE;
+        Arrays.fill(lpState, 0.0);
+        if (!lpOn) return;
+        double w0 = 2.0 * Math.PI * (0.42 * rate) / RATE;
+        double cos = Math.cos(w0);
+        double sin = Math.sin(w0);
+        for (int s = 0; s < 2; s++) {
+            double alpha = sin / (2.0 * BUTTERWORTH_Q[s]);
+            double a0 = 1.0 + alpha;
+            int c = s * 5;
+            lpCoef[c] = (1.0 - cos) / 2.0 / a0;
+            lpCoef[c + 1] = (1.0 - cos) / a0;
+            lpCoef[c + 2] = (1.0 - cos) / 2.0 / a0;
+            lpCoef[c + 3] = -2.0 * cos / a0;
+            lpCoef[c + 4] = (1.0 - alpha) / a0;
+        }
+        Log.i(TAG, "anti-alias low-pass at " + Math.round(0.42 * rate) + " Hz for a " + rate + " Hz mic");
+    }
+
+    private float lowPass(int ch, float x) {
+        double v = x;
+        for (int s = 0; s < 2; s++) {
+            int c = s * 5;
+            int z = s * 4 + ch * 2;
+            double y = lpCoef[c] * v + lpState[z];
+            lpState[z] = lpCoef[c + 1] * v - lpCoef[c + 3] * y + lpState[z + 1];
+            lpState[z + 1] = lpCoef[c + 2] * v - lpCoef[c + 4] * y;
+            v = y;
+        }
+        return (float) v;
     }
 
     /** Soft limiter: linear below the knee, then a tanh shoulder that never passes full scale. */

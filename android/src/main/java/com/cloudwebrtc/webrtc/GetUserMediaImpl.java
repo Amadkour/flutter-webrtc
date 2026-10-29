@@ -609,8 +609,12 @@ public class GetUserMediaImpl {
         VideoSource videoSource = pcFactory.createVideoSource(true);
 
         String threadName = Thread.currentThread().getName() + "_texture_screen_thread";
-        SurfaceTextureHelper surfaceTextureHelper =
-                SurfaceTextureHelper.create(threadName, EglUtils.getRootEglBaseContext());
+        // ElFaheem: its frames are pushed in by the app, it never uses a texture
+        // helper — none is created (one was leaked per share: never registered,
+        // so removeVideoCapturer could not dispose it).
+        SurfaceTextureHelper surfaceTextureHelper = videoCapturer instanceof ElFaheemFrameCapturer
+                ? null
+                : SurfaceTextureHelper.create(threadName, EglUtils.getRootEglBaseContext());
         videoCapturer.initialize(
                 surfaceTextureHelper, applicationContext, videoSource.getCapturerObserver());
 
