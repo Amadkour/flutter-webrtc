@@ -508,6 +508,27 @@ public class GetUserMediaImpl {
 
     void getDisplayMedia(
             final ConstraintsMap constraints, final Result result, final MediaStream mediaStream) {
+        // --- ElFaheem: single-MediaProjection integration ---
+        // ScreenCaptureService (app module) already owns the one-and-only
+        // MediaProjection grant for the whole session, obtained once at
+        // session start. This branch skips mediaProjectionData /
+        // screenRequestPermissions entirely — no second system dialog.
+        // Stage 1: ElFaheemFrameCapturer pushes synthetic solid-color
+        // frames, to prove this path reaches LiveKit with zero
+        // MediaProjection involvement. Stage 2 replaces the capturer's
+        // internal timer with real frames pushed in from
+        // ScreenCaptureService's OpenGL fan-out step.
+        ConstraintsMap videoConstraints =
+                constraints.getType("video") == ObjectType.Map ? constraints.getMap("video") : null;
+        boolean useElFaheemCapturer = videoConstraints != null
+                && videoConstraints.hasKey("useElFaheemCapturer")
+                && videoConstraints.getBoolean("useElFaheemCapturer");
+        if (useElFaheemCapturer) {
+            createDisplayMediaTrack(new ElFaheemFrameCapturer(), result, mediaStream);
+            return;
+        }
+        // --- end ElFaheem branch — original behavior below is unchanged ---
+
         if (mediaProjectionData == null) {
             screenRequestPermissions(
                     new ResultReceiver(new Handler(Looper.getMainLooper())) {
@@ -530,9 +551,7 @@ public class GetUserMediaImpl {
 
     private void getDisplayMedia(final Result result, final MediaStream mediaStream, final Intent mediaProjectionData) {
         /* Create ScreenCapture */
-        VideoTrack displayTrack = null;
-        VideoCapturer videoCapturer = null;
-        videoCapturer =
+        VideoCapturer videoCapturer =
                 new OrientationAwareScreenCapturer(
                         mediaProjectionData,
                         new MediaProjection.Callback() {
@@ -548,7 +567,20 @@ public class GetUserMediaImpl {
             resultError("screenRequestPermissions", "GetDisplayMediaFailed, User revoked permission to capture the screen.", result);
             return;
         }
+        createDisplayMediaTrack(videoCapturer, result, mediaStream);
+    }
 
+    /**
+     * Shared track-assembly logic for getDisplayMedia. Extracted so both the
+     * real screen capturer (OrientationAwareScreenCapturer, above) and
+     * ElFaheemFrameCapturer (the single-MediaProjection integration, used
+     * when useElFaheemCapturer is set) produce an identical result shape.
+     * This is the original getDisplayMedia(Result, MediaStream, Intent)'s
+     * tail half, unchanged in behavior — only parameterized on the capturer.
+     */
+    private void createDisplayMediaTrack(
+            VideoCapturer videoCapturer, final Result result, final MediaStream mediaStream) {
+        VideoTrack displayTrack;
         PeerConnectionFactory pcFactory = stateProvider.getPeerConnectionFactory();
         VideoSource videoSource = pcFactory.createVideoSource(true);
 
@@ -573,7 +605,7 @@ public class GetUserMediaImpl {
         info.capturer = videoCapturer;
 
         videoCapturer.startCapture(info.width, info.height, info.fps);
-        Log.d(TAG, "OrientationAwareScreenCapturer.startCapture: " + info.width + "x" + info.height + "@" + info.fps);
+        Log.d(TAG, "getDisplayMedia.startCapture: " + info.width + "x" + info.height + "@" + info.fps);
 
         String trackId = stateProvider.getNextTrackUUID();
         mVideoCapturers.put(trackId, info);
